@@ -9,7 +9,7 @@ between files.
 
 Features:
 - Automatically detects and reads common code and text files
-- Excludes specified directories by default (node_modules, .git, etc.)
+- Excludes specified directories and files by default (node_modules, .git, etc.)
 - Generates a tree view of the directory structure
 - Creates a single Markdown file with all contents
 - Handles permission errors gracefully
@@ -20,6 +20,7 @@ Example usage:
     codemap                     # Document current directory
     codemap /path/to/project    # Document specific directory
     codemap -e logs temp        # Exclude additional directories
+    codemap -f README.md        # Exclude additional files
 
 Example output (Codebase.md):
     # Codebase Documentation
@@ -68,8 +69,8 @@ def read_file_content(filepath: str) -> Tuple[bool, str]:
             return True, f.read()
     except (UnicodeDecodeError, PermissionError, IOError):
         return False, f"Error: Could not read file {filepath}"
-
-def generate_codebase_doc(startpath: str, exclude_dirs: List[str]) -> str:
+    
+def generate_codebase_doc(startpath: str, exclude_dirs: List[str], exclude_files: List[str]) -> str:
     """Generate documentation including file contents and directory structure."""
     file_contents = []
     tree = []
@@ -90,11 +91,12 @@ def generate_codebase_doc(startpath: str, exclude_dirs: List[str]) -> str:
             not os.path.isdir(os.path.join(path, x)),
             x.lower()
         ))
-        
+
         filtered_entries = [
             entry for entry in entries 
             if not any(excluded in os.path.join(path, entry) for excluded in exclude_dirs)
-        ]
+            and entry not in exclude_files
+        ]        
         
         for idx, entry in enumerate(filtered_entries, 1):
             entry_path = os.path.join(path, entry)
@@ -130,7 +132,7 @@ def generate_codebase_doc(startpath: str, exclude_dirs: List[str]) -> str:
 def main():
     parser = argparse.ArgumentParser(
         description="Generate comprehensive codebase documentation including file contents and structure."
-    )
+    )    
     parser.add_argument(
         'path', 
         nargs='?', 
@@ -143,6 +145,13 @@ def main():
         nargs='+', 
         default=['node_modules', '.git', '__pycache__', 'venv', '.env'],
         help='Folders to exclude (default: node_modules .git __pycache__ venv .env)'
+    )
+    parser.add_argument(
+        '-f',
+        '--exclude-files',
+        nargs='+',
+        default=['Codebase.md'],
+        help='Files to exclude (default: Codebase.md)'
     )
 
     args = parser.parse_args()
@@ -157,7 +166,7 @@ def main():
         sys.exit(1)
     
     try:
-        documentation = generate_codebase_doc(repo_path, args.exclude)
+        documentation = generate_codebase_doc(repo_path, args.exclude, args.exclude_files)
         output_file = "Codebase.md"
         
         with open(output_file, 'w', encoding='utf-8') as f:
