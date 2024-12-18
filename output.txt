@@ -1684,11 +1684,27 @@ So far, in this work we assumed that a probability distribution $p$ over $\gS$ i
 
 It is important to note that not every probability distribution admits a density with respect to a reference measure. For the reader unfamiliar with general measure theory, it is safe ignore this possibility as a technical remark as long one works with distributions of interest that have a density $p(x)$. However, note that these are not just pathological examples but there are real cases of interest for machine learning applications where this matters: A simple example is a probability path of the form $p_t=\delta_{(1-t)x+ty}$ on $\gS=\mathbb{R}^d$ connecting two points $x,y\in\mathbb{R}^d$ in a straight line - this cannot be represented by a density. Another example would be probability distributions over $\gS=C([0,1],\mathbb{R})$, \eg, for trajectory modeling, that often do not have a density with respect to a common reference measure. To mathematically handle such cases, we develop our framework for general \highlight{probability measures} $p$ over $\gS$. For this, we use the notation $p(\dd x)$ where ``$\dd x$'' is a *symbolic* expression denoting integration with respect to $p$ in a variable $x$. For example, for a bounded measurable function $f:\gS\to\mathbb{R}$ we write \begin{align*} \mathbb{E}_{X\sim p}[f(X)] = \int f(x)p(\dd x) \end{align*} for the Lebesgue integral or the expected value of $f$ under $p$. As before, we use (with a slight abuse of notation) the same notation $p(x)$ to denote the density of the measure $p(\dd x)$.
 
-**Table:** \label{table:Markov_overview} Some examples of CTMP generative models and how they can be learnt with Generator Matching. This list is not exhaustive. Derivations are in \cref{sec:fellerflow}. For diffusion, we assume zero drift as this is covered by the ``Flow'' column. KFE is listed in its adjoint version, \ie, assumes jump kernel $Q_t(y,x)$ and density $p_t(x)$ exists with respect to reference measure $\nu$. ``p.s.d.'': Positive semi-definite. \label{table:Markov_overview}
+**Table:** Some examples of CTMP generative models and how they can be learnt with Generator Matching. This list is not exhaustive. Derivations are in \cref{sec:fellerflow}. For diffusion, we assume zero drift as this is covered by the ``Flow'' column. KFE is listed in its adjoint version, \ie, assumes jump kernel $Q_t(y,x)$ and density $p_t(x)$ exists with respect to reference measure $\nu$. ``p.s.d.'': Positive semi-definite. \label{table:Markov_overview}
 
-| Name | \highlight{Flow} | \highlight{Diffusion} | \highlight{Jump process} | \begin{tabular}{@{}c@{}}\highlight{Continous-time} |
-| --- | --- | --- | --- | --- |
-| \highlight{Markov chain} | | | | |
+```latex
+\begin{tabular}{lcccc} \toprule Name & \highlight{Flow} & \highlight{Diffusion} & \highlight{Jump process} & \begin{tabular}{@{}c@{}}\highlight{Continous-time} \\ \highlight{Markov chain} \end{tabular}
+\begin{tabular}{@{}c@{}} Velocity field: \\ $u_t(x)\in\mathbb{R}^d$ \end{tabular}
+\begin{tabular}{@{}c@{}} Diffusion coefficient:\\ $\sigma_t(x)\in\mathbb{R}^{d\times d}$ (p.s.d.) \end{tabular}
+\begin{tabular}{@{}c@{}} Jump measure $Q_t(\dd y,x)$\\ \end{tabular}
+\begin{tabular}{@{}c@{}}$u_t\in\mathbb{R}^{\gS \times \gS}$, $1^Tu_t=0$\\ $u_{t}(x';x)\geq 0$ ($x'\neq x$) \end{tabular}
+\begin{tabular}{@{}c@{}} Sampling \end{tabular}
+\begin{tabular}{@{}c@{}} $X_{t+h} = X_{t}+\sqrt{h}\sigma_t(X_t)\epsilon_t$\\ $\epsilon_t\sim\mathcal{N}(0,I)$ \end{tabular}
+\begin{tabular}{@{}c@{}} $X_{t+h} = X_{t}$ with prob. $1-h\int Q_t(\dd y,x)$\\ $X_{t+h} \sim \frac{Q_t(\dd y,x)}{\int Q_t(\dd y,x)}$ with prob. $h\int Q_t(\dd y,x)$ \end{tabular}
+\begin{tabular}{@{}c@{}} KFE \\ (Adjoint) \end{tabular}
+\begin{tabular}{@{}c@{}} Continuity Equation: \\ $\partial_tp_t=-\divv(p_tu_t)$ \end{tabular}
+\begin{tabular}{@{}c@{}} Fokker-Planck Equation: \\ $\partial_tp_t=\frac{1}{2}\nabla^2\cdot(p_t\sigma^2_t)$ \end{tabular}
+\begin{tabular}{@{}c@{}} Jump Continuity Equation: $\partial_tp_t(x) =$\\ $\int Q_t(x,y)p_t(y)-Q_t(y,x)p_t(x)\nu(\dd y)$ \end{tabular}
+\begin{tabular}{@{}c@{}} Mass preservation:\\ $ \partial_tp_{t} =u_tp_t$ \end{tabular}
+\begin{tabular}{@{}c@{}} Marginal \end{tabular}
+\begin{tabular}{@{}c@{}} CGM Loss \\ (Example) \end{tabular}
+\begin{tabular}{@{}c@{}} $(\int Q_{t}^\theta(y;X)\nu(\dd y)$\\ $-Q_t(y,X|Z)\log Q_{t}^\theta(y;X)\nu(\dd y))$ \end{tabular}
+\begin{tabular}{@{}c@{}} $(\sum\limits_{y\neq x}u_{t}^\theta(y;X)$\\ $-u_t(y;X|Z)\log u_{t}^\theta(y;X))$ \end{tabular}
+```
 
 ## The CTMP generative model
 
