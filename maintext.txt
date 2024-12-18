@@ -1,0 +1,282 @@
+\addtocontents{toc}{\protect\setcounter{tocdepth}{0}}
+
+# Amortized Probabilistic Conditioning for Optimization, Simulation and Inference
+
+\runningauthor{Chang$^{*}$, Loka$^{*}$, Huang$^{*}$, Remes, Kaski, Acerbi}
+
+\twocolumn[ \aistatstitle{Amortized Probabilistic Conditioning \\ for Optimization, Simulation and Inference}
+
+\aistatsauthor{Paul E. Chang$^{*1}$ \And Nasrulloh Loka$^{*1}$ \And Daolang Huang$^{*2}$ \And Ulpu Remes$^3$ \And Samuel Kaski$^{2,4}$ \And Luigi Acerbi$^1$}
+
+\aistatsaddress{$^1$Department of Computer Science, University of Helsinki, Helsinki, Finland \\ $^2$Department of Computer Science, Aalto University, Espoo, Finland \\ $^3$Department of Mathematics and Statistics, University of Helsinki, Helsinki, Finland \\ $^4$Department of Computer Science, University of Manchester, Manchester, United Kingdom } ]
+
+# Abstract
+
+Amortized meta-learning methods based on pre-training have propelled fields like natural language processing and vision. Transformer-based neural processes and their variants are leading models for probabilistic meta-learning with a tractable objective. Often trained on synthetic data, these models implicitly capture essential latent information in the data-generation process. However, existing methods do not allow users to flexibly *inject* (condition on) and *extract* (predict) this probabilistic latent information at runtime, which is key to many tasks. We introduce the Amortized Conditioning Engine (ACE), a new transformer-based meta-learning model that explicitly represents latent variables of interest. ACE affords conditioning on both observed data and interpretable latent variables, the inclusion of priors at runtime, and outputs predictive distributions for discrete and continuous data and latents. We show ACE's modeling flexibility and performance in diverse tasks such as image completion and classification, Bayesian optimization, and simulation-based inference.\looseness=-1
+
+# Introduction
+
+**Figure:** **Probabilistic conditioning and prediction.** Many tasks reduce to *probabilistic conditioning* on data and key latent variables (left) and then *predicting* data and latents (right). (\textcolor{blue}{a}) Image completion and classification (data: pixels; latents: classes). *Top*: Class prediction. *Bottom*: Conditional generation. (\textcolor{blue}{b}) Bayesian optimization (data: function values; latents: optimum location $x_\text{opt}$ and value $y_\text{opt}$). We predict both the function values and $x_\text{opt}$, $y_\text{opt}$ given function observations and a prior over $x_\text{opt}$, $y_\text{opt}$ (here flat). (\textcolor{blue}{c}) Simulator-based inference (data: observations; latents: model parameter $\theta$). Given data and a prior over $\theta$, we can compute both the posterior over $\theta$ and predictive distribution over unseen data. Our method fully amortizes probabilistic conditioning and prediction. \label{fig:intro}
+
+Amortization, or pre-training, is a crucial technique for improving computational efficiency and generalization across many machine learning tasks, from regression \citep{garnelo2018neural} to optimization \citep{amos2022tutorial} and simulation-based inference \citep{cranmer2020frontier}. By training a deep neural network on a large dataset of related problems and solutions, amortization can achieve both fast inference time, solving problems with a single forward pass, and meta-learning, better adapting to new problems by capturing high-level statistical relations \citep{brown2020language}. Probabilistic meta-learning models based on the transformer architecture \citep{vaswani2017attention} are the state-of-the-art for amortizing complex predictive data distributions \citep{nguyen2022transformer, muller2022transformers}. 
+
+This paper capitalizes on the fact that many machine learning problems reduce to *predicting* data and task-relevant latent variables after *conditioning* on other data and latents \citep{ghahramani2015probabilistic}; see \cref{fig:intro}. Moreover, in many scenarios the user has exact or probabilistic information (priors) about task-relevant variables that they would like to leverage, but incorporating such prior knowledge is challenging, requiring dedicated, expensive solutions.
+
+For instance, in Bayesian optimization \citep{garnett2023bayesian}, the goal is to find the location $\xopt$ and value $\yopt$ of the global minimum of a function (\cref{fig:intro}b). Following information-theoretical principles, we should query points that would reduce uncertainty (entropy) about the optimum's location or value. However, predictive distributions over $\xopt$ and $\yopt$ are intractable, leading to complex approximation techniques \citep{hennig2012entropy, hernandez2014predictive, wang2017max}. Moreover, incorporating prior knowledge in the optimization process, such as a theoretically known $\yopt$ value or expert knowledge about likely $\xopt$ locations, requires ad-hoc solutions \citep{nguyen2020knowing, souza2021bayesian}.
+
+Similar challenges extend to many machine learning tasks, including regression and classification (\cref{fig:intro}a), and simulation-based inference (\cref{fig:intro}c), all involving predicting, sampling, and probabilistic conditioning on either exact values or distributions (priors) at runtime.
+
+In this work, we address the desiderata above by introducing the *Amortized Conditioning Engine* (ACE), a general amortization framework which extends transformer-based meta-learning architectures \citep{nguyen2022transformer, muller2022transformers} with explicit and flexible probabilistic modeling of task-relevant latent variables. Our main goal with ACE is to develop a method capable of addressing a variety of tasks that would otherwise require bespoke solutions and approximations. Through the lens of amortized probabilistic conditioning and prediction, we provide a unifying methodological bridge across multiple fields.
+
+#### Contributions.
+
+Our contributions include: 
+
+- We propose ACE, a transformer-based architecture that simultaneously affords, at inference time, conditioning and autoregressive probabilistic prediction for arbitrary combinations of data and latent variables, both continuous and discrete.
+- We introduce a new technique for allowing the user to provide probabilistic information (priors) over each latent variable at inference time.
+- We substantiate the generality of our framework through a series of tasks from different fields, including image completion and classification, Bayesian optimization, and simulation-based inference, on both synthetic and real data.
+
+#### Related work.
+
+Our work builds on advances in neural processes, meta-learning, and simulation-based inference (SBI). ACE extends neural processes \citep{garnelo2018neural, garnelo2018conditional, kim2019attentive, nguyen2022transformer} and prior-fitted networks (PFNs; \citealp{muller2022transformers}) by explicitly modeling and conditioning on latent variables, allowing flexible priors at runtime, and yielding predictive distributions for both data and interpretable latents. Related SBI works \citep{cranmer2020frontier, radev2023jana, gloeckler2024all} use deep networks to recover posterior distributions or emulate simulators, with some models allowing runtime conditioning. However, ACE uniquely accommodates both flexible priors and discrete outputs, and we show its applicability to multiple tasks beyond SBI. An extensive discussion of related work is in \cref{app:ex_related_work}.
+
+# Preliminaries
+\label{sec:preliminaries}
+
+In this section, we review previous work on transformer-based probabilistic meta-learning models within the framework of prediction maps \citep{foong2020meta, markou2022practical} and Conditional Neural Processes (CNPs; \citealp{garnelo2018conditional}). We denote with $\x \in \XX \subseteq \mathbb{R}^{D}$ input vectors (covariates) and $y \in \YY \subseteq \mathbb{R}$ scalar output vectors (values). 
+
+#### Prediction maps.
+
+A *prediction map* $\pi$ is a function that maps (1) a *context set* of input/output pairs $\data_N = \{(\x_1, y_1), \ldots, (\x_N, y_N)\}$ and (2) a collection of *target inputs* $\xt_{1:M} \equiv (\xt_1, \ldots, \xt_M)$ to a distribution over the corresponding *target outputs* $\yt_{1:M} \equiv (\yt_{1}, \ldots, \yt_M)$: 
+
+$$
+\label{eq:predictionmap}
+\pi\left(\yt_{1:M} \vert \xt_{1:M}; \data_N \right) = p\left(\yt_{1:M}| \r(\xt_{1:M}, \data_N) \right),
+$$
+
+where $\r$ is a *representation vector* of the context and target sets that parameterizes the predictive distribution. Such map should be invariant with respect to permutations of the context set and, separately, of the targets \citep{foong2020meta}. The Bayesian posterior is a prediction map, with the Gaussian Process (GP; \citealp{rasmussen2006gaussian}) posterior a special case.
+
+#### Diagonal prediction maps.
+
+We call a prediction map *diagonal* if it represents and predicts each target independently: 
+
+$$
+\label{eq:diagonal_map}
+\pi(\yt_{1:M} \vert \xt_{1:M}; \data_N ) = \prod_{m=1}^M p\left(\yt_m| \r(\xt_m, \r_{\data}(\data_N))\right)
+$$
+
+where $\r_{\data}$ denotes a representation of the context alone. Diagonal outputs ensure that a prediction map is permutation and marginalization consistent with respect to the targets for a fixed context, necessary conditions for a valid stochastic process \citep{markou2022practical}.
+
+CNPs are diagonal prediction maps parameterized by deep neural networks \citep{garnelo2018conditional}. CNPs encode the context set to a *fixed-dimension* vector $\r_{\data}$ via a DeepSet \citep{zaheer2017deep} to ensure permutation invariance of the context, and each target predictive distribution is a Gaussian whose mean and variance are decoded by a multi-layer perceptron (MLP). Given the likelihood in \cref{eq:diagonal_map}, CNPs are easily trainable via maximum-likelihood optimization of parameters of encoder and decoder networks by sampling batches of context and target sets.
+
+#### Transformers.
+
+Transformers \citep{vaswani2017attention} are deep neural networks based on the attention mechanism, which computes a weighted combination of hidden states of dimension $D_\text{emb}$ through three learnable linear projections: query ($Q$), key ($K$), and value ($V$). The attention operation, $\text{softmax}(QK^T / \sqrt{D_\text{emb}})V$, captures complex relationships between inputs. *Self-attention* computes $Q$, $K$, and $V$ from the same input set, whereas *cross-attention* uses two sets, one for computing the queries and another for keys and values. A standard transformer architecture consists of multiple stacked self-attention and MLP layers with residual connections and layer normalization \citep{vaswani2017attention}. Without specifically injecting positional information, transformers process inputs in a permutation-equivariant manner. 
+
+#### Transformer diagonal prediction maps.
+
+We define here a general *transformer prediction map* model family, focusing on its *diagonal* variant (TPM-D), which includes the TNP-D model from \citet{nguyen2022transformer} and *prior-fitted networks* (PFNs; \citealp{muller2022transformers}). TPM-Ds are not strictly CNPs because the context set is encoded by a *variable-size* representation, but they otherwise share many similarities. In a TPM-D, context data $(\x_n, y_n)_{n=1}^N$ and target inputs $(\xt_m)_{m=1}^M$ are first individually mapped to vector embeddings of size $D_\text{emb}$ via an embedder $f_\text{emb}$, often a linear map or an MLP. The embedded context points are processed together via a series of $B-1$ transformer layers implementing *self-attention* within the context set. We denote by $\E^{(b)} = (\e_1^{(b)}, \ldots, \e_N^{(b)})$ the matrix of output embeddings of the $b$-th transformer layer, with $b=0$ the embedding layer. The encoded context representation is the stacked output of all layers, i.e. $\r_{\data} = (\E^{(0)}, \ldots, \E^{(B-1)})$, whose size is *linear* in the context size $N$. The decoder is represented by a series of $B$ transformer layers that apply *cross-attention* from the embedded target points to the context set layer-wise, with the $b$-th target transformer layer attending the output $\E^{(b-1)}$ of the previous context transformer layer. The decoder transformer layers operate *in parallel* on each target point. The $M$ outputs of the $B$-th decoder block are fed in parallel to an output head yielding the predictive distribution, \cref{eq:diagonal_map}. This shows that indeed TPM-Ds are diagonal prediction maps. The predictive distribution is a single Gaussian in TNP-D \citep{nguyen2022transformer} and a `Riemannian distribution' (a mixture of uniform distributions with fixed bin edges and half-Gaussian tails on the sides) in PFNs \citep{muller2022transformers}. While in TPM-Ds encoding is mathematically decoupled from decoding, in practice encoding and decoding are commonly implemented in parallel within a single transformer layer via masking \citep{nguyen2022transformer, muller2022transformers}. 
+
+**Figure:** **Prior amortization.** Two example posterior distributions for the mean $\mu$ and standard deviation $\sigma$ of a 1D Gaussian. (\subref{fig:prior_distribution}) Prior distribution over $\vtheta = (\mu, \sigma)$ set at runtime. (\subref{fig:likelihood}) Likelihood for the observed data. (\subref{fig:true_posterior}) Ground-truth Bayesian posterior. (\subref{fig:ace_predicted_posterior}) ACE's predicted posterior approximates well the true posterior. \label{fig:prior_distribution} \label{fig:likelihood} \label{fig:true_posterior} \label{fig:ace_predicted_posterior} \label{fig:gaussian_examples_main}
+
+# Amortized Conditioning Engine
+\label{sec:ace}
+
+We describe now our proposed Amortized Conditioning Engine (ACE) architecture, which affords arbitrary probabilistic conditioning and predictions. We assume the problem has $ L$ task-relevant latent variables of interest $ \vtheta = (\theta_1, \ldots, \theta_L) $. ACE amortizes arbitrary conditioning over latents (in context) and data to predict arbitrary combinations of latents (in target) and data. ACE also amortizes conditioning on probabilistic information about unobserved latents, represented by an approximate prior distribution $p(\theta_l)$ for $l \in \{1, \ldots, L\}$; see \cref{fig:gaussian_examples_main} for an example (details in \cref{app:priors}).
+
+## ACE encodes latents and priors
+\label{sec:latentspriors}
+
+We demonstrate here that ACE is a new member of the TPM-D family, by extending the prediction map formalism to explicitly accommodate latent variables. In ACE, we aim to seamlessly manipulate variables that could be either data points $(\x, y)$ or latent variables $\theta_l$, for a finite set of continuous or discrete-valued latents $1 \le l\le L$.
+
+We redefine inputs as $\vxi \in \XX \cup \{\ell_1, \ldots, \ell_L \}$ where $\XX \subseteq \mathbb{R}^D$ denotes the data input space (covariates) and $\ell_l$ is a marker for the $l$-th latent. We also redefine the values as $z \in \mathcal{Z} \subseteq \mathbb{R}$ where $\mathcal{Z}$ can be continuous or a finite set of integers for discrete-valued output. Thus, $(\vxi, z)$ could denote either a (input, output) data pair or a (index, value) latent pair with either continuous or discrete values. With these new flexible definitions, ACE is indeed a transformer diagonal prediction map (TPM-D). In particular, we can predict any combination of target variables (data or latents) conditioning on any other combination of context data and latents, $\dataplus_N = \left\{(\vxi_1, z_1), \ldots, (\vxi_N, z_N)\right\}$: 
+
+$$
+\label{eq:ace_map}
+\pi(\zt_{1:M} \vert \vxit_{1:M}; \dataplus_N ) = \prod_{m=1}^M p\left(\zt_m| \r(\vxit_m, \r_{\data}(\dataplus_N))\right).
+$$
+
+#### Prior encoding.
+\label{sec:prior}
+
+ACE also allows the user to express probabilistic information over latent variables as prior probability distributions at runtime. Our method affords prior specification separately for each latent, corresponding to a factorized prior $p(\vtheta) = \prod_{l=1}^L p(\theta_l)$. To flexibly approximate a broad class of distributions, we convert each one-dimensional probability density function $p(\theta_l)$ to a normalized histogram of probabilities $\mathbf{p}_l \in [0, 1]^{N_\text{grid}}$ over a predefined grid $\mathcal{G}$ of $N_\text{bins}$ bins uniformly covering the range of values. We can represent this probabilistic conditioning information within the prediction map formalism by extending the context output representation to $z \in \left\{ \mathcal{Z} \cup [0,1]^{N_\text{bins}} \right\}$, meaning that a context point either takes a specific value or a prior defined on $\mathcal{G}$ (see \cref{app:priors}).
+
+## ACE architecture
+
+We detail below how ACE extends the general TPM-D architecture presented in \cref{sec:preliminaries} to implement latent and prior encoding, enabling flexible probabilistic conditioning and prediction. We introduce a novel embedding layer for latents and priors, adopt an efficient transformer layer implementation, and provide an output represented by a flexible Gaussian mixture or categorical distribution.
+
+#### Embedding layer.
+
+In ACE, the embedders map context and target data points and latents to the same underlying embedding space of dimensionality $D_\text{emb}$. The ACE embedders can handle discrete or continuous inputs without the need of tokenization. For the context set, we embed an observed data point $(\x_n, y_n)$ as $f_\x(\x_n) + f_\text{val}(y_n) + \e_\text{data}$, while we embed an observed latent variable $\theta_l$ as $f_\text{val}(\theta_l) + \e_l$, where $\e_\text{data}$ and $\e_l$ for $1\le l \le L$ are learnt vector embeddings, and $f_\x$ and $f_\text{val}$ are learnt nonlinear embedders (MLPs) for the covariates and values, respectively. For discrete-valued variables (data or latents), $f_\text{val}$ is replaced by a vector embedding matrix $\E_\text{val}$ with a separate row for each discrete value. Latent variables with a prior $\mathbf{p}_l$ are mapped to the context set as $f_\text{prob}(\mathbf{p}_l) + \e_l$, where $f_\text{prob}$ is a learnt MLP. In the target set, the *value* of a variable is unknown and needs to be predicted, so we replace the value embedders above with a learnt `unknown' embedding $\e_?$, i.e. $f_\x(\x_n) + \e_? + \e_\text{data}$ for data points and $\e_? + \e_l$ for latents.
+
+#### Transformer layers.
+
+After the embedding layer, the network consists of $B$ stacked feed-forward transformer layers \citep{vaswani2017attention}. Each transformer layer consists of a multi-head attention block followed by a MLP. Both the attention and MLP blocks are followed by a normalization layer, and include a skip connection from the previous step. The multi-head attention block combines encoder and decoder in the same step, with self-attention on the context points (encoding) and cross-attention from the target points to the context set (decoding). Our implementation differs from others which compute a single masked context + target attention matrix with $O((N + M)^2)$ cost \citep{nguyen2022transformer,muller2022transformers}. Instead, by separating the context self-attention and target cross-attention matrices we incur a $O(N^2 + NM)$ cost for attention \citep{feng2023latent}.
+
+#### Output heads.
+
+A mixture-of-Gaussians prediction output head is applied in parallel to all target points after the output of the last transformer layer. For a continuous-valued variable, the output head consists of $K$ MLPs that separately output the parameters of $K$ 1D Gaussians, that is `raw' (weight, mean, standard deviation) for each mixture component \citep{uria2016neural}. A learnt global raw bias term ($3 \times K$ parameters) is summed to each raw output, helping the network learn deviations from the global (marginal) distribution of values. Then weights, means and standard deviations for each mixture component are obtained after applying appropriate transformations (softmax, identity, and softplus, respectively). For discrete-valued variables, the output head is a MLP that outputs a softmax categorical distribution over the discrete values.
+
+## Training and prediction
+\label{sec:training}
+
+ACE is trained via maximum-likelihood on synthetic data consisting of batches of context and target sets, using the Adam optimizer (details in \cref{app:sampling}).
+
+#### Training.
+
+We generate each problem instance hierarchically by first sampling the latent variables $\vtheta$, and then data points $(\X, \y)$ according to the generative model of the task. For example, $\vtheta$ could be length scale and output scale of a 1D Gaussian process with a given kernel, and $(\X, \y)$ input locations and function values. Data and latents are randomly split between context and target. For training with probabilistic information $\mathbf{p}$, we first sample the priors for each latent variable from a hierarchical model $\mathcal{P}$ which includes mixtures of Gaussians and Uniform distributions (see \cref{app:priors}) and then sample the value of the latent from the chosen prior. During training, we minimize the expected negative log-likelihood of the target set conditioned on the context, $\mathcal{L}\left(**w**\right)$: 
+
+$$
+\label{eq:loss}
+\begin{split}
+
+\mathbb{E}_\mathcal{\mathbf{p} \sim P} &\left[ \mathbb{E}_{\dataplus_N, \vxi_{1:M},\z_{1:M} \sim \mathbf{p}}\left[-\sum_{m=1}^M \log q\left(z^\star_m|\r_**w**(\vxi^\star_m, \dataplus_N)\right) \right] \right], \end{split}
+$$
+
+\noindent where $q$ is our model's prediction (a mixture of Gaussians or categorical), and $**w**$ are the model parameters. Minimizing \cref{eq:loss} is equivalent to minimizing the Kullback-Leibler (KL) divergence between the data sampled from the generative process and the model. Since the generative process is consistent with the provided contextual prior information, training will aim to converge (KL-wise) as close as possible, for the model capacity, to the correct Bayesian posteriors and predictive distributions for the specified generative model and priors \citep{muller2022transformers, elsemueller2024sensitivity}.
+
+#### Prediction.
+
+ACE is trained via *independent* predictions of target data and latents, \cref{eq:loss}. Given the closed-form likelihood (mixture of Gaussians or categorical), we can easily evaluate or sample from the predictive distribution at any desired target point (data or latent) in parallel, conditioned on the context. Moreover, we can predict *non-independent* joint distributions autoregressively \citep{nguyen2022transformer,bruinsma2023autoregressive}; see \cref{app:autoregressive} for details.
+
+\input{image.tex}
+
+# Experiments
+\label{sec:experiments}
+
+The following section showcases ACE's capabilities as a general framework applicable to diverse machine learning and modeling tasks.\footnote{The code implementation of ACE is available at \href{https://github.com/acerbilab/amortized-conditioning-engine/}{github.com/acerbilab/amortized-conditioning-engine/}.}
+
+Firstly, \cref{exp:image} demonstrates how ACE complements transformer-based meta-learning in image completion and classification. In \cref{exp:bo}, we show how ACE can be applied to Bayesian optimization (BO) by treating the location and value of the global optimum as latent variables. We then move to simulation-based inference (SBI) in \cref{exp:sbi}, where ACE unifies the SBI problem into a single framework, treating parameters as latent variables and affording both forward and inverse modelling. Notably, SBI and BO users may have information about the simulator or target function. ACE affords incorporation of informative priors about latent variables at runtime, as detailed in \cref{sec:prior}, a variant we call ACEP in these experiments. Finally, 
+
+in \cref{app:gp} we provide extra experimental results on Gaussian Processes (GPs) where ACE can accurately predict the kernel, \ie model selection (\cref{fig:GP}), while at the same time learn the hyperparameters, in addition to the common data prediction task.
+
+## Image completion and classification
+\label{exp:image}
+
+We treat image completion as a regression task \citep{garnelo2018neural}, where the goal is given some limited $\data_N$ of image coordinates and corresponding pixel values to predict the complete image. For the `MNIST` \citep{deng2012mnist} task, we downsize the images to $16 \times 16$ and likewise for `CelebA` to $32 \times 32$ \citep{liu2015faceattributes}. We turn the class label into a single discrete latent for `MNIST` while for `CelebA`, we feed the full $40$ corresponding binary features (\eg, `BrownHair, Man, Smiling`). The latents are sampled using the procedure outlined in \cref{app:sampling} and more experimental details of the image completion task can be found in \cref{app:image}. Notably, ACE affords conditional predictions of pixels based on latent variables ($\vtheta$) -- such as class labels in `MNIST` and appearance features in `CelebA` -- as well as the prediction of these latent variables themselves.
+
+**Results.** In \cref{fig:whole_image_celeb_main} we present a snapshot of the results for `CelebA` and in \cref{app:image} we present the same for `MNIST`. The more complex output distribution allows ACE to outperform other Transformer NPs convincingly, and the integration of latent information shows a clear improvement. In \cref{app:image}, we present our full results, including predicting $\vtheta$. 
+
+## Bayesian optimization (BO)
+\label{exp:bo}
+
+**Figure:** (\subref{fig:BO_walkthrough_1}) ACE predicts function values \legendpygivenx \ as well as latents \legendpxopt \ and \legendpyopt. (\subref{fig:BO_walkthrough_2}) Further conditioning on \legendyoptcond \ (here the true minimum value) leads to updated predictions. \label{fig:BO_walkthrough_1} \label{fig:BO_walkthrough_2} \label{fig:BO_walkthrough}
+
+BO aims to find the global minimum $ \yopt = f(\xopt) $ of a black-box function. This is typically achieved iteratively by building a *surrogate model* that approximates the target and optimizing an *acquisition function* $\alpha(\mathbf{x})$ to determine the next query point. ACE provides additional modeling options for the BO loop by affording direct conditioning on, and prediction of, key latents $\xopt$ and $\yopt$, yielding closed-form predictive distributions and samples for $p(\xopt | \data_N)$, $p(\yopt | \data_N)$, and $ p(\xopt | \data_N, \yopt)$; see \cref{fig:BO_walkthrough}.
+
+For the BO task, we trained ACE on synthetic functions generated from GP samples with RBF and Matérn-($\nicefrac{1}{2}$, $\nicefrac{3}{2}$, $\nicefrac{5}{2}$) kernels and a random global optimum $(\xopt,\yopt)$ within the function domain; see \cref{app:bo} for details. We leverage ACE's explicit modeling of latents in multiple ways.
+
+Firstly, ACE affords a straightforward implementation of a variant of Thompson Sampling (TS) \citep{dutordoir2023neural, liu2024large}. First, we sample a candidate optimum value, $\yopt^\star$, conditioning on it being below a threshold $\tau$, from the truncated predictive distribution $\yopt^\star \sim p(\yopt | \data_N, \yopt<\tau)$; see \cref{fig:BO_walkthrough_1}. Given $\yopt^\star$, we then sample the query point $\x^\star \sim p(\xopt | \data_N, \yopt^\star)$; \cref{fig:BO_walkthrough_2}.\footnote{Why not sampling directly from $p(\xopt | \data_N)$? The issue is that $p(\xopt | \data_N)$ may reasonably include substantial probability mass at the current optimum, which would curb exploration. The constraint $\yopt < \tau$, with $\tau$ (just) below the current optimum value, ensures continual exploration.} This process is repeated iteratively within the BO loop (see \cref{fig:bo_evolution}). For higher input dimensions ($D > 1$), we sample $\x^\star$ autoregressively \citep{bruinsma2023autoregressive}; see \cref{sec:ace-bo-alg}. Crucially, ACE's capability of directly modeling $\xopt$ and $\yopt$ bypasses the need for surrogate optimization or grid searches typical of standard TS implementations (\eg, GP-TS or TNP-D based TS).
+
+\input{bo_main}
+
+Second, ACE also easily supports advanced acquisition functions used in BO, such as Max-Value Entropy Search (MES; \citealp{wang2017max}). For a candidate point $\xt$, MES evaluates the expected gain in mutual information between $\yopt$ and $\xt$: 
+
+$$
+\begin{aligned} \label{eq:mes}
+\alpha_\text{MES}(\xt) &= \textcolor{red}{H[p(\yt| \xt, \data_N)]}\\ &- \mathbb{E}_{\textcolor{latent2}{p(\yopt| \data_N)}}\left[\textcolor{red}{H[p(\yt| \xt, \data_N, \yopt)]}\right]. \end{aligned}
+$$
+
+With all predictive distributions available in closed form, ACE can readily calculate the expectation and entropies in \cref{eq:mes} via \textcolor{latent2}{Monte Carlo sampling} and fast 1D \textcolor{red}{numerical integration}, unlike other methods that require more laborious approximations. For maximizing $\alpha(\x^\star)$, we obtain a good set of candidate points via Thompson Sampling (see \cref{sec:ace-bo-alg} for details). 
+
+In our BO benchmarks, we compare ACE with gold-standard Gaussian processes (GPs) and the state-of-the-art TNP-D model (\cref{fig:bo_comparisons}). Additionally, we test a setup where prior information is provided about the location of the optimum \citep{souza2021bayesian, hvarfner2022pi, muller2023pfns4bo}; \cref{fig:bo_prior_main_comparisons}. Unlike other methods that employ heuristics or complex approximations, ACE's architecture affords seamless incorporation of a prior $p(\xopt)$. Here, we consider two types of priors: strong and weak, represented by Gaussians with a standard deviation equal to, respectively, 10\% and 25\% of the optimization box width in each dimension, and mean drawn from a Gaussian centered on the true optimum and same standard deviation (see \cref{sec:bo_prior}).
+
+**Results.** In \cref{fig:bo_comparisons}, we compare the performance of ACE Thompson sampling (ACE-TS) and MES (ACE-MES) with GP-based MES (GP-MES; \citealp{wang2017max}), GP-based Thompson Sampling (GP-TS; \citealp{balandat2020botorch}), and Autoregressive TNP-D based Thompson Sampling (AR-TNPD-TS; \citealp{bruinsma2023autoregressive,nguyen2022transformer}) on several benchmark functions (see \cref{sec:bo-benchmarks} for details). ACE-MES frequently outperforms ACE-TS and often matches the gold-standard GP-MES. In the prior setting, we compare ACE without (ACE-TS) and with prior (ACEP-TS) against $\pi$BO-TS, a state-of-the-art heuristic for prior injection in BO \citep{hvarfner2022pi}, as well as the GP-TS baseline. ACEP-TS shows significant improvement over its no-prior variant ACE-TS while showing competitive performance compared to $\pi$BO-TS in both weak and strong prior case (\cref{fig:bo_prior_main_comparisons}).
+
+**Figure:** **Bayesian optimization with prior over $\xopt$.** Regret comparison on 2D and 3D optimization benchmarks. Left: Weak Gaussian prior (25\%), Right: Strong prior (10\%). ACEP-TS performs competitively compared to $\pi$BO-TS. \label{fig:bo_prior_main_comparisons}
+
+## Simulation-based inference (SBI)
+\label{exp:sbi}
+
+**Table:** **Comparison metrics for SBI models** on parameters ($\vtheta$) and data ($y$) prediction; mean and (\textcolor{gray}{standard deviation}) from 5 runs. *Left*: Statistically significantly (see \cref{app:sbi_cfg}) best results are **bolded**. ACE shows performance comparable to the other methods on latents prediction. In the data prediction task, ACE performs similarly to Simformer with much lower sampling cost at runtime (see text). *Right*: ACE can leverage probabilistic information provided at runtime by informative priors (ACEP), yielding improved performance. \label{tab:sbi}
+
+```latex
+\begin{table*}[!t] \centering \scalebox{0.88}{ \begin{tabular}{cc|cccc|cc} \toprule & & NPE & NRE & Simformer & ACE & ACEP$_\text{weak prior}$ & ACEP$_\text{strong prior}$ \\ \cmidrule(lr){3-8} \multirow{3}{*}{OUP} & $\text{log-probs}_{\theta}$ ($\uparrow$) & **1.04**\textcolor{gray}{(0.03)} & **1.08**\textcolor{gray}{(0.13)} & **1.02**\textcolor{gray}{(0.03)} & **1.01**\textcolor{gray}{(0.01)} & 1.28\textcolor{gray}{(0.03)} & 1.57\textcolor{gray}{(0.03)} \\ & $\text{RMSE}_{\theta}$ ($\downarrow$) & **0.58**\textcolor{gray}{(0.01)} & 0.60\textcolor{gray}{(0.01)} & **0.59**\textcolor{gray}{(0.04)} & **0.59**\textcolor{gray}{(0.00)} & 0.43\textcolor{gray}{(0.01)} & 0.26\textcolor{gray}{(0.01)} \\ & $\text{MMD}_{y}$ ($\downarrow$) & - & - & **0.43**\textcolor{gray}{(0.02)} & 0.50\textcolor{gray}{(0.00)} & 0.39\textcolor{gray}{(0.00)} & 0.35\textcolor{gray}{(0.00)} \\ \midrule \midrule \multirow{3}{*}{SIR} & $\text{log-probs}_{\theta}$ ($\uparrow$) & 6.80\textcolor{gray}{(0.07)} & 6.51\textcolor{gray}{(0.29)} & **6.87**\textcolor{gray}{(0.06)} & 6.77\textcolor{gray}{(0.02)} & 6.85\textcolor{gray}{(0.05)} & 6.95\textcolor{gray}{(0.06)} \\ & $\text{RMSE}_{\theta}$ ($\downarrow$) & **0.03**\textcolor{gray}{(0.00)} & 0.04\textcolor{gray}{(0.00)} & 0.07\textcolor{gray}{(0.02)} & **0.03**\textcolor{gray}{(0.00)} & 0.03\textcolor{gray}{(0.00)} & 0.02\textcolor{gray}{(0.00)} \\ & $\text{MMD}_{y}$ ($\downarrow$) & - & - & **0.02**\textcolor{gray}{(0.00)} & **0.03**\textcolor{gray}{(0.00)} & 0.02\textcolor{gray}{(0.00)} & 0.00\textcolor{gray}{(0.00)} \\ \midrule \midrule \multirow{3}{*}{Turin} & $\text{log-probs}_{\theta}$ ($\uparrow$) & 2.07\textcolor{gray}{(0.10)} & 2.42\textcolor{gray}{(0.11)} & **3.02**\textcolor{gray}{(0.03)} & **3.01**\textcolor{gray}{(0.01)} & 6.06\textcolor{gray}{(0.12)} & 7.58\textcolor{gray}{(0.73)} \\ & $\text{RMSE}_{\theta}$ ($\downarrow$) & 0.39\textcolor{gray}{(0.00)} & 0.43\textcolor{gray}{(0.00)} & **0.25**\textcolor{gray}{(0.00)} & **0.25**\textcolor{gray}{(0.00)} & 0.10\textcolor{gray}{(0.01)} & 0.08\textcolor{gray}{(0.01)} \\ & $\text{MMD}_{y}$ ($\downarrow$) & - & - & **0.34**\textcolor{gray}{(0.00)} & **0.34**\textcolor{gray}{(0.00)} & 0.33\textcolor{gray}{(0.00)} & 0.32\textcolor{gray}{(0.00)} \\ \bottomrule \end{tabular}}
+
+\end{table*}
+```
+
+We now apply ACE to simulation-based inference (SBI; \citealp{cranmer2020frontier}). With ACE, we can predict the posterior distribution of (latent) model parameters, simulate data based on parameters, predict missing data given partial observations, and set priors at runtime. We consider two benchmark time-series models, each with two latents: the Ornstein-Uhlenbeck Process (OUP; \citealt{uhlenbeck1930theory}) and the Susceptible-Infectious-Recovered model (SIR; \citealt{kermack1927contribution}); and a third more complex engineering model from the field of radio propagation (Turin; \citealp{turin1972statistical}), which has four parameters and produces 101-dimensional data representing a radio signal. See \cref{app:sbi} for all model descriptions.
+
+We compare ACE with Neural Posterior Estimation (NPE; \citealt{greenberg2019automatic}), Neural Ratio Estimation (NRE; \citealt{miller2022contrastive}), and Simformer \citep{gloeckler2024all}, from established to state-of-the-art methods in amortized SBI. We evaluate ACE in three different scenarios. For the first one, we use only the observed data as context. For the other two scenarios, we inform ACE with priors over the parameters (ACEP), to assess their impact on posterior prediction. These priors are Gaussians with standard deviation equal to 25\% (weak) or 10\% (strong) of the parameter range, and mean drawn from a Gaussian centered on the true parameter value and the same standard deviation.
+
+We evaluate the performance of posterior estimation using the log probabilities of the ground-truth parameters and the root mean squared error (RMSE) between the true parameters and posterior samples. Since both ACE and Simformer can predict missing data from partial observations -- an ability that previous SBI methods lack -- we also test them on a data prediction task. For each observed dataset, we randomly designate half of the data points as missing and use the remaining half as context for predictions. We then measure performance via the maximum mean discrepancy (MMD) between the true data and the predicted distributions.
+
+**Results.** Results are reported in \cref{tab:sbi}; see \cref{app:sbi} for details. For ACE, we see that joint training to predict data and latents does not compromise its posterior estimation performance compared to NPE and NRE, even achieving better performance on the Turin model. ACE and Simformer obtain similar results. However, as Simformer uses diffusion, data sampling is substantially slower. For example, we measured the time required to generate 1,000 posterior samples for 100 sets of observations on the OUP model using a CPU (\textcolor{magenta}{GPU}) across 5 runs: the average time for Simformer is $\sim$ 130 minutes (\textcolor{magenta}{14 minutes}), whereas ACE takes 0.05 seconds (\textcolor{magenta}{0.02 s}). When we provide ACE with informative priors (ACEP; \cref{tab:sbi} right), performance improves in proportion to the provided information. Importantly, simulation-based calibration checks \citep{talts2018validating} show that both ACE and ACEP output good approximate posteriors (\cref{app:sbc}).
+
+Finally, we applied ACE to a real-world outbreak dataset \citep{avilov20231978} using an extended, four-parameter version of the SIR model. We show that ACE can handle real data, providing reasonable results under a likely model mismatch (see \cref{app:sbi_real}).
+
+# Discussion
+\label{sec:discussion}
+
+\label{sec:limitations}
+
+In this paper, we introduced the Amortized Conditioning Engine (ACE), a unified transformer-based architecture that affords arbitrary probabilistic conditioning and prediction over data and task-relevant variables for a wide variety of tasks. In each tested domain ACE performed on par with state-of-the-art, bespoke solutions, and with greater flexibility. As a key feature, ACE allows users to specify probabilistic information at runtime (priors) without the need for retraining as required instead by the majority of previous amortized inference methods \citep{cranmer2020frontier}.
+
+#### Limitations and future work.
+
+As all amortized and machine learning methods, ACE's predictions become unreliable if applied to data unseen or sparsely seen during training due to mismatch between the generative model used in training and real data (*misspecification* or covariate shift). This is an active area of research in terms of developing both more robust training objectives \citep{huang2024learning} and diagnostics \citep{schmitt2023detecting}.
+
+Due to self-attention, our method incurs quadratic cost in the context size $N$ (but linear in the target size $M$). Future work could investigate sub-quadratic attention variants for set representations \citep{feng2023latent}. Our model could also be improved by incorporating known equivariances \citep{huang2023practical} and varying covariate dimensionality at runtime \citep{liu2020task, dutordoir2023neural,muller2023pfns4bo}.
+
+By learning to predict marginal conditionals, ACE can eventually learn the full joint distribution which we can query autoregressively \citep{bruinsma2023autoregressive}. However, scalability of learning the full joint pdf of a large number of data and latents remains challenging. Similar limitations apply to our prior-setting technique, currently applied to a small number of latents under a factorized, smooth prior. Further work should extend these probabilistic modeling capabilities.
+
+#### Conclusions.
+
+ACE shows strong promise as a new unified and versatile method for amortized probabilistic conditioning and prediction, able to perform various probabilistic machine learning tasks.
+
+# Acknowledgments
+
+PC, DH, UR, SK, and LA were supported by the Research Council of Finland (Flagship programme: Finnish Center for Artificial Intelligence FCAI). NL was funded by Business Finland (project 3576/31/2023). LA was also supported by Research Council of Finland grants 358980 and 356498. SK was also supported by the UKRI Turing AI World-Leading Researcher Fellowship, [EP/W002973/1]. The authors wish to thank the Finnish Computing Competence Infrastructure (FCCI), Aalto Science-IT project, and CSC–IT Center for Science, Finland, for the computational and data storage resources provided.
+
+\bibliographystyle{unsrtnat} \bibliography{bibliography}
+
+\ignore{ 
+
+# Checklist
+
+1. For all models and algorithms presented, check if you include: \begin{enumerate}
+2. A clear description of the mathematical setting, assumptions, algorithm, and/or model. [\textcolor{red}{Yes}] Please see detailed method in \cref{sec:ace} and additional algorithms are in \cref{sec:ace-bo-alg}.
+3. An analysis of the properties and complexity (time, space, sample size) of any algorithm. [\textcolor{red}{Not Applicable}] Our architecture is based on the standard attention mechanism \citep{vaswani2017attention} which has well-known properties.
+4. (Optional) Anonymized source code, with specification of all dependencies, including external libraries. [\textcolor{red}{Yes}] We will release the source code to reproduce a working example in the Supplementary Material (see also below).
+
+- For any theoretical claim, check if you include: 
+
+1. Statements of the full set of assumptions of all theoretical results. 
+
+[\textcolor{red}{Not Applicable}]
+2. Complete proofs of all theoretical results.
+
+[\textcolor{red}{Not Applicable}]
+3. Clear explanations of any assumptions. [Yes/No/Not Applicable] 
+
+[\textcolor{red}{Not Applicable}]
+
+- For all figures and tables that present empirical results, check if you include: 
+
+1. The code, data, and instructions needed to reproduce the main experimental results (either in the supplemental material or as a URL).
+
+[\textcolor{red}{No}] We provide a working example in the Supplementary Material that demonstrates our method's core functionality and can reproduce the main experimental results; we commit to releasing the full codebase upon acceptance.
+2. All the training details (e.g., data splits, hyperparameters, how they were chosen). [\textcolor{red}{Yes}] In \cref{app:experiments} we provide all experimental details.
+3. A clear definition of the specific measure or statistics and error bars (e.g., with respect to the random seed after running experiments multiple times). [\textcolor{red}{Yes}] See \cref{exp:image}, \cref{exp:bo}, \cref{exp:sbi} and \cref{app:experiments}.
+4. A description of the computing infrastructure used. (e.g., type of GPUs, internal cluster, or cloud provider). [\textcolor{red}{Yes}] See \cref{app:computation}.
+
+- If you are using existing assets (e.g., code, data, models) or curating/releasing new assets, check if you include: 
+
+1. Citations of the creator If your work uses existing assets. [\textcolor{red}{Yes}] See \cref{app:computation}.
+2. The license information of the assets, if applicable. [\textcolor{red}{Yes}] See \cref{app:computation}.
+3. New assets either in the supplemental material or as a URL, if applicable. [\textcolor{red}{Not Applicable}]
+4. Information about consent from data providers/curators. [\textcolor{red}{Not Applicable}]
+5. Discussion of sensible content if applicable, e.g., personally identifiable information or offensive content. [\textcolor{red}{Not Applicable}]
+
+- If you used crowdsourcing or conducted research with human subjects, check if you include: 
+
+1. The full text of instructions given to participants and screenshots. [\textcolor{red}{Not Applicable}]
+2. Descriptions of potential participant risks, with links to Institutional Review Board (IRB) approvals if applicable. [\textcolor{red}{Not Applicable}]
+3. The estimated hourly wage paid to participants and the total amount spent on participant compensation. [\textcolor{red}{Not Applicable}]
+
+\end{enumerate} }
+
+\appendix
+
+\include{appendix}
