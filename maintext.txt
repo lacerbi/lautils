@@ -1,4 +1,32 @@
-\maketitle
+# Flow Matching for Scalable Simulation-Based Inference
+
+**Authors:** %
+ Maximilian Dax\thanks{Equal contribution} \\
+ Max Planck Institute for Intelligent Systems\\
+ Tübingen, Germany \\
+\texttt{maximilian.dax@tuebingen.mpg.de} \\
+ \And
+ Jonas Wildberger\footnotemark[1] \\
+ Max Planck Institute for Intelligent Systems\\
+ Tübingen, Germany \\
+\texttt{wildberger.jonas@tuebingen.mpg.de} \\
+ \And
+ Simon Buchholz\footnotemark[1] \\
+ Max Planck Institute for Intelligent Systems\\
+ Tübingen, Germany\\
+\texttt{sbuchholz@tue.mpg.de} \\
+ \And 
+ Stephen R.~Green \\
+ *{1.2cm}University of Nottingham*{1.2cm} \\ Nottingham, United Kingdom \\ 
+ \And
+ Jakob H.~Macke\\
+ Max Planck Institute for Intelligent Systems \&\\
+ Machine Learning in Science, \\University of Tübingen\\
+ Tübingen, Germany \\ 
+ \And
+ Bernhard Schölkopf\\
+ Max Planck Institute for Intelligent Systems\\
+ Tübingen, Germany \\
 
 # Abstract
 

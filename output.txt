@@ -1,4 +1,4 @@
-\maketitle
+# Flow Matching Guide and Code
 
 \tableofcontents 
 
