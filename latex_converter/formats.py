@@ -103,6 +103,11 @@ def final_cleanup(text):
     str
         Cleaned up text, ready to be written to the output file.
     """
+    # Replace spaces or tabs before and after '\n' with just '\n'
+    text = re.sub(r'[ \t]*\n[ \t]*', '\n', text)
+    # Replace sequences of two or more spaces with a single space
     text = re.sub(r' {2,}', ' ', text)
+    # Replace sequences of three or more newlines with two newlines
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip() + "\n"
+
