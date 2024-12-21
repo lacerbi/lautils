@@ -1,5 +1,7 @@
 project_name: "AI codemap"
 project_info: "Prepare a codebase documentation to feed as context to an LLM coder"
+focus: 
+  - ./codemap.py
 exclude:
   - .env
   - .git

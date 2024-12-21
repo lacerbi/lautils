@@ -13,7 +13,7 @@ Prepare a codebase documentation to feed as context to an LLM coder
 python %~dp0\codemap.py %*
 ```
 
-### codemap.py
+### codemap.py *
 
 ```python
 #!/usr/bin/env python3
@@ -47,12 +47,14 @@ Usage:
     codemap -e logs temp README.md  # Exclude files or directories
     codemap -e *.log *.tmp -o docs.md  # Exclude using patterns and specify output file
     codemap -o custom_output.md     # Specify a different output file
+    codemap -f src/utils.py src/helpers/  # Focus on specific files and directories
 
 Configuration (_aiconfig.yml):
     project_name: "My Project"                # Custom project name
     project_info: "Project description..."    # Project documentation
     prompts: "Instructions for the LLM..."    # LLM-specific instructions
     exclude: [".git", "public", "codebase.md", "_aiconfig.yml"] # Files and dirs to exclude
+    focus: ["src/utils.py", "src/helpers/"]    # Files and dirs to focus
     output_file: "custom_codebase.md"         # Custom output file name
 
 Output (codebase.md or specified output file):
@@ -78,6 +80,7 @@ Output (codebase.md or specified output file):
     
     Instructions for the LLM...
 """
+
 import os
 import argparse
 import sys
@@ -239,17 +242,22 @@ def get_syntax_highlighting(filename: str) -> str:
     ext = os.path.splitext(filename)[1].lower()
     return SYNTAX_HIGHLIGHTING.get(ext, 'text')
 
-def read_file_content(filepath: str) -> Tuple[bool, str]:
-    """Read file content, return (success, content)."""
+def read_file_content(filepath: str, is_focused: bool) -> Tuple[bool, str]:
+    """Read file content, return (success, content). Truncate if not focused."""
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            return True, f.read()
+            lines = f.readlines()
+            if not is_focused and len(lines) > 10:
+                content = ''.join(lines[:10]) + '\n... (content truncated)'
+                return True, content
+            else:
+                return True, ''.join(lines)
     except (UnicodeDecodeError, PermissionError, IOError):
         return False, f"Error: Could not read file {filepath}"
-    
-def generate_codebase_doc(startpath: str, exclude: List[str], 
+        
+def generate_codebase_doc(startpath: str, exclude: List[str], focus: List[str],
                          project_name: Optional[str] = None, project_info: Optional[str] = None,
-                         prompts: Optional[str] = None) -> str:
+                         prompts: Optional[str] = None) -> Tuple[str, List[str]]:
     """Generate documentation including file contents and directory structure."""
     file_contents = []
     tree = []
@@ -257,7 +265,21 @@ def generate_codebase_doc(startpath: str, exclude: List[str],
     project_name = project_name or root_name
     tree.append(f"{root_name}/")
     
+    # Normalize focus paths
+    normalized_focus = set(os.path.normpath(os.path.join(startpath, f)) for f in focus)
+    focus_found = False
+    
+    def is_focused_path(path: str) -> bool:
+        """Determine if a path is focused or is within a focused directory."""
+        normalized_path = os.path.normpath(path)
+        for focus_path in normalized_focus:
+            if normalized_path == focus_path or normalized_path.startswith(focus_path + os.sep):
+                return True
+        return False
+
     def process_directory(path: str, prefix: str = '') -> None:
+        nonlocal focus_found
+        
         try:
             entries = os.listdir(path)
         except PermissionError:
@@ -281,22 +303,26 @@ def generate_codebase_doc(startpath: str, exclude: List[str],
             entry_path = os.path.join(path, entry)
             relative_path = os.path.relpath(entry_path, startpath)
             is_last = idx == len(filtered_entries)
+            focused = is_focused_path(entry_path)
+            marker = " *" if focused else ""
+            if focused:
+                focus_found = True
             
             if is_last:
-                tree.append(f"{prefix}└── {entry}")
+                tree.append(f"{prefix}└── {entry}{marker}")
                 new_prefix = prefix + "    "
             else:
-                tree.append(f"{prefix}├── {entry}")
+                tree.append(f"{prefix}├── {entry}{marker}")
                 new_prefix = prefix + "│   "
             
             if os.path.isdir(entry_path):
                 process_directory(entry_path, new_prefix)
             elif is_text_file(entry):
-                success, content = read_file_content(entry_path)
+                success, content = read_file_content(entry_path, focused)
                 if success:
                     syntax = get_syntax_highlighting(entry)
                     lastline = '' if (content and content[-1] == '\n') else '\n'
-                    file_contents.append(f"\n### {relative_path}\n\n```{syntax}\n{content}{lastline}```\n")
+                    file_contents.append(f"\n### {relative_path}{marker}\n\n```{syntax}\n{content}{lastline}```\n")
 
     process_directory(startpath)
     
@@ -312,12 +338,15 @@ def generate_codebase_doc(startpath: str, exclude: List[str],
     doc += "\n## Directory Structure\n\n```\n"
     doc += "\n".join(tree)
     doc += "\n```\n"
+
+    if focus_found:
+        doc += "\n**Note:** The `*` indicates a relevant file or folder for the current task.\n"
     
     # Add prompts if available
     if prompts:
         doc += f"\n# Instructions\n\n{prompts}\n"
     
-    return doc
+    return doc, tree  # Return tree for printing
 
 def main():
     parser = argparse.ArgumentParser(
@@ -343,6 +372,13 @@ def main():
         default=None,
         help='Output file name (default: codebase.md)'
     )
+    parser.add_argument(
+        '-f',
+        '--focus',
+        nargs='+',
+        default=[],
+        help='Files and folders to focus on'
+    )
 
     args = parser.parse_args()
     repo_path = os.path.abspath(args.path)
@@ -366,23 +402,35 @@ def main():
         # Update exclusions from config if present
         if 'exclude' in config:
             args.exclude.extend(config['exclude'])
+        
+        # Update focus from config if present
+        if 'focus' in config:
+            args.focus.extend(config['focus'])
     
     # Determine the output file name
     output_file = args.output or config.get('output_file', 'codebase.md')
     
+    # Determine the focus list
+    focus_list = args.focus if args.focus else config.get('focus', [])
+    
     try:
-        documentation = generate_codebase_doc(
+        documentation, tree = generate_codebase_doc(
             repo_path,
             args.exclude,
+            focus=focus_list,
             project_name=config.get('project_name'),
             project_info=config.get('project_info'),
             prompts=config.get('prompts')
         )
-        
+
+        # Print the directory tree to the console
+        for line in tree:
+            print(line)
+
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(documentation)
             
-        print(f"Documentation has been saved to '{output_file}'")
+        print(f"Documentation has been saved to '{output_file}'")        
             
     except Exception as e:
         print(f"Error: {str(e)}", file=sys.stderr)
@@ -397,8 +445,10 @@ if __name__ == "__main__":
 ```
 codemap/
 ├── codemap.bat
-└── codemap.py
+└── codemap.py *
 ```
+
+**Note:** The `*` indicates a relevant file or folder for the current task.
 
 # Instructions
 
@@ -461,9 +511,3 @@ __XML HERE__
 ```
 
 ## **Your Current Task:**
-
-Add a new command -focus or -f which takes as input folders and/or files. 
-All files selected are in focus, as well as all files in the selected folders and their subfolders.
-Mark focused files and folders with (*) in the file tree (this includes all files in a focus folder and all subfolders).
-If a focus file or folder (or more than one) is specified, for all of the non-focused files show only the first ten lines (if the file has more than ten lines) and then say that the rest of the file is not shown.
-Add the focus option to the YAML config. Elements in -f are added to the ones in the config.
