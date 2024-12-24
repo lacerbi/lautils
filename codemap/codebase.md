@@ -1,3 +1,71 @@
+# Instructions
+
+## Coding Instructions
+
+### AI Summary
+
+When coding a new file, always add on top a brief description of the content of the file
+and its purpose, as a commented section (as appropriate for the file type).
+Title this section "AI Summary: <summary here>".
+
+If the content of the file changes, change the AI Summary to reflect the actual content.
+
+### File Length
+
+Files should be up to 100 lines max, unless there is a reason otherwise.
+
+Whenever possible, refactor long files (>> 100 lines) into smaller files.
+
+## General Instructions
+
+You are an expert software engineer.
+
+You are tasked with following my instructions.
+
+Use the included project instructions as a general guide.
+
+If asked to write code, you will respond with 2 sections: A summary section and an XML section.
+
+Here are some notes on how you should respond in the summary section:
+
+- Provide a brief overall summary
+- Provide a 1-sentence summary for each file changed and why.
+- Provide a 1-sentence summary for each file deleted and why.
+- Format this section as markdown.
+
+Here are some notes on how you should respond in the XML section:
+
+- Respond with the XML and nothing else
+- Include all of the changed files
+- Specify each file operation with CREATE, UPDATE, or DELETE
+- If it is a CREATE or UPDATE include the full file code. Do not get lazy.
+- Each file should include a brief change summary.
+- Include the full file path
+- I am going to copy/paste that entire XML section into a parser to automatically apply the changes you made, so put the XML block inside a markdown codeblock.
+- Make sure to enclose the code with ![CDATA[__CODE HERE__]]
+
+Here is how you should structure the XML:
+
+<code_changes>
+<changed_files>
+<file>
+<file_summary>**BRIEF CHANGE SUMMARY HERE**</file_summary>
+<file_operation>**FILE OPERATION HERE**</file_operation>
+<file_path>**FILE PATH HERE**</file_path>
+<file_code><![CDATA[
+__FULL FILE CODE HERE__
+]]></file_code>
+</file>
+**REMAINING FILES HERE**
+</changed_files>
+</code_changes>
+
+So the XML section will be:
+
+```xml
+__XML HERE__
+```
+
 # Codebase Documentation `AI codemap`
 
 ## Project Information
@@ -54,7 +122,7 @@ Configuration (_aiconfig.yml):
     project_info: "Project description..."    # Project documentation
     prompts: "Instructions for the LLM..."    # LLM-specific instructions
     exclude: [".git", "public", "codebase.md", "_aiconfig.yml"] # Files and dirs to exclude
-    focus: ["src/utils.py", "src/helpers/"]    # Files and dirs to focus
+    focus: ["src/utils.py"]                   # Files and dirs to focus
     output_file: "custom_codebase.md"         # Custom output file name
 
 Output (codebase.md or specified output file):
@@ -75,6 +143,7 @@ Output (codebase.md or specified output file):
     my-project/
     └── src
         └── main.py
+        └── utils.py *
         
     # Instructions
     
@@ -272,9 +341,18 @@ def generate_codebase_doc(startpath: str, exclude: List[str], focus: List[str],
     def is_focused_path(path: str) -> bool:
         """Determine if a path is focused or is within a focused directory."""
         normalized_path = os.path.normpath(path)
-        for focus_path in normalized_focus:
-            if normalized_path == focus_path or normalized_path.startswith(focus_path + os.sep):
-                return True
+
+        for f in normalized_focus:
+            # Check if f is a simple name
+            if os.path.basename(f) == f and os.path.dirname(f) == '':
+                # If basename matches, consider it focused
+                if os.path.basename(normalized_path) == f:
+                    return True
+            else:
+                # Otherwise treat f as a path
+                focus_norm = os.path.normpath(f)
+                if normalized_path == focus_norm or normalized_path.startswith(focus_norm + os.sep):
+                    return True
         return False
 
     def process_directory(path: str, prefix: str = '') -> None:
@@ -295,8 +373,8 @@ def generate_codebase_doc(startpath: str, exclude: List[str], focus: List[str],
         ))
 
         filtered_entries = [
-            entry for entry in entries 
-            if entry not in exclude
+            entry for entry in entries
+            if not should_exclude(os.path.join(path, entry), exclude)
         ]        
         
         for idx, entry in enumerate(filtered_entries, 1):
@@ -324,10 +402,39 @@ def generate_codebase_doc(startpath: str, exclude: List[str], focus: List[str],
                     lastline = '' if (content and content[-1] == '\n') else '\n'
                     file_contents.append(f"\n### {relative_path}{marker}\n\n```{syntax}\n{content}{lastline}```\n")
 
+    # Inserted: Define should_exclude function
+    def should_exclude(full_path: str, exclude_list: List[str]) -> bool:
+        """
+        Decide whether 'full_path' should be excluded based on exclude_list.
+        - If an exclude item is just a name (e.g. 'foo'), then exclude if basename == 'foo'.
+        - If an exclude item is a path (absolute or relative), then exclude if full_path
+          starts with that path or exactly equals that path.
+        """
+        base_name = os.path.basename(full_path)
+        norm_path = os.path.normpath(full_path)
+
+        for exc in exclude_list:
+            # If exclude item is name-only
+            if os.path.basename(exc) == exc and os.path.dirname(exc) == '':
+                if base_name == exc:
+                    return True
+            else:
+                # Otherwise treat exc as a path
+                exc_norm = os.path.normpath(exc)
+                if norm_path == exc_norm or norm_path.startswith(exc_norm + os.sep):
+                    return True
+        return False
+
     process_directory(startpath)
     
+    doc = ''
+
+    # Add prompts if available
+    if prompts:
+        doc += f"# Instructions\n\n{prompts}\n\n"
+
     # Combine file contents and directory tree
-    doc = f"# Codebase Documentation `{project_name}`\n\n"
+    doc += f"# Codebase Documentation `{project_name}`\n\n"
     
     # Add project information if available
     if project_info:
@@ -341,11 +448,9 @@ def generate_codebase_doc(startpath: str, exclude: List[str], focus: List[str],
 
     if focus_found:
         doc += "\n**Note:** The `*` indicates a relevant file or folder for the current task.\n"
-    
-    # Add prompts if available
-    if prompts:
-        doc += f"\n# Instructions\n\n{prompts}\n"
-    
+
+    doc += "\n# **Your Current Task:**\n\n"
+        
     return doc, tree  # Return tree for printing
 
 def main():
@@ -399,14 +504,34 @@ def main():
         print(f"Found configuration file at: {config_path}")
         config = load_config(config_path)
         
-        # Update exclusions from config if present
-        if 'exclude' in config:
-            args.exclude.extend(config['exclude'])
+        # Inserted: Resolve config paths relative to config_dir
+        config_dir = os.path.dirname(config_path)
         
-        # Update focus from config if present
-        if 'focus' in config:
-            args.focus.extend(config['focus'])
-    
+        def resolve_config_path(p: str) -> str:
+            """
+            Resolve the path in the config:
+            - If p is absolute, return it as is.
+            - If p contains any slashes, treat it as relative to config_dir.
+            - Otherwise, p is treated as a name match (return as is).
+            """
+            if os.path.isabs(p):
+                return os.path.normpath(p)
+            if any(s in p for s in ['/', '\\']):
+                return os.path.normpath(os.path.join(config_dir, p))
+            return p  # name-only match
+        
+        config_excludes = [resolve_config_path(p) for p in config.get('exclude', [])]
+        config_focus = [resolve_config_path(p) for p in config.get('focus', [])]
+        
+        # Now combine these resolved paths with args.exclude/focus:
+        args.exclude.extend(config_excludes)
+        args.focus.extend(config_focus)
+        
+        # Update focus_list for generate_codebase_doc
+        focus_list = args.focus if args.focus else config.get('focus', [])
+    else:
+        focus_list = args.focus
+
     # Determine the output file name
     output_file = args.output or config.get('output_file', 'codebase.md')
     
@@ -431,7 +556,7 @@ def main():
             f.write(documentation)
             
         print(f"Documentation has been saved to '{output_file}'")        
-            
+        
     except Exception as e:
         print(f"Error: {str(e)}", file=sys.stderr)
         sys.exit(1)
@@ -450,64 +575,12 @@ codemap/
 
 **Note:** The `*` indicates a relevant file or folder for the current task.
 
-# Instructions
+# **Your Current Task:**
 
-## Coding Instructions
+Refactor the current file into three or four files of more manageable size.
 
-When coding a new file, always add on top a brief description of the content of the file
-and its purpose, as a commented section (as appropriate for the file type).
-Title this section "AI Summary: <summary here>".
+Do NOT use artifacts. Follow the coding instructions written above.
 
-If the content of the file changes, change the summary to reflect the actual content.
+Keep the existing documentation.
 
-## General Instructions
-
-You are an expert software engineer.
-
-You are tasked with following my instructions.
-
-Use the included project instructions as a general guide.
-
-If asked to write code, you will respond with 2 sections: A summary section and an XML section.
-
-Here are some notes on how you should respond in the summary section:
-
-- Provide a brief overall summary
-- Provide a 1-sentence summary for each file changed and why.
-- Provide a 1-sentence summary for each file deleted and why.
-- Format this section as markdown.
-
-Here are some notes on how you should respond in the XML section:
-
-- Respond with the XML and nothing else
-- Include all of the changed files
-- Specify each file operation with CREATE, UPDATE, or DELETE
-- If it is a CREATE or UPDATE include the full file code. Do not get lazy.
-- Each file should include a brief change summary.
-- Include the full file path
-- I am going to copy/paste that entire XML section into a parser to automatically apply the changes you made, so put the XML block inside a markdown codeblock.
-- Make sure to enclose the code with ![CDATA[__CODE HERE__]]
-
-Here is how you should structure the XML:
-
-<code_changes>
-<changed_files>
-<file>
-<file_summary>**BRIEF CHANGE SUMMARY HERE**</file_summary>
-<file_operation>**FILE OPERATION HERE**</file_operation>
-<file_path>**FILE PATH HERE**</file_path>
-<file_code><![CDATA[
-__FULL FILE CODE HERE__
-]]></file_code>
-</file>
-**REMAINING FILES HERE**
-</changed_files>
-</code_changes>
-
-So the XML section will be:
-
-```xml
-__XML HERE__
-```
-
-## **Your Current Task:**
+If your output is truncated, restart the XML including all the truncated parts from the beginning.

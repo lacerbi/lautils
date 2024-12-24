@@ -18,11 +18,19 @@ output_file: "codebase.md"
 prompts: |
   ## Coding Instructions
 
+  ### AI Summary
+
   When coding a new file, always add on top a brief description of the content of the file
   and its purpose, as a commented section (as appropriate for the file type).
   Title this section "AI Summary: <summary here>".
 
-  If the content of the file changes, change the summary to reflect the actual content.
+  If the content of the file changes, change the AI Summary to reflect the actual content.
+
+  ### File Length
+
+  Files should be up to 100 lines max, unless there is a reason otherwise.
+  
+  Whenever possible, refactor long files (>> 100 lines) into smaller files.
 
   ## General Instructions
 
@@ -73,5 +81,3 @@ prompts: |
   ```xml
   __XML HERE__
   ```
-
-  ## **Your Current Task:**
